@@ -55,7 +55,7 @@ class OpenTelemetryMetricRecorder {
   void RegisterGaugeMetric(const std::string &name, const std::string &description);
 
   // Set the value of a metric given the tags and the metric value.
-  void SetMetricValue(const std::string &name,
+  bool SetMetricValue(const std::string &name,
                       absl::flat_hash_map<std::string, std::string> &&tags,
                       double value);
 

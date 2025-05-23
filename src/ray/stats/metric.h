@@ -24,6 +24,7 @@
 #include <unordered_map>
 #include <utility>
 
+#include "absl/container/flat_hash_map.h"
 #include "opencensus/stats/stats.h"
 #include "opencensus/stats/stats_exporter.h"
 #include "opencensus/tags/tag_key.h"
@@ -37,6 +38,8 @@ namespace stats {
 
 /// Include tag_defs.h to define tag items
 #include "ray/stats/tag_defs.h"
+
+using OpenTelemetryMetricRecorder = ray::telemetry::OpenTelemetryMetricRecorder;
 
 /// StatsConfig per process.
 /// Note that this is not thread-safe. Don't modify its internal values
@@ -263,12 +266,12 @@ void RegisterView(const std::string &name,
                              .set_description(description)
                              .set_measure(name)
                              .set_aggregation(I::Aggregation(buckets));
-  if (T == GAUGE) {
-    auto &open_telemetry_metric_recorder =
-        ray::telemetry::OpenTelemetryMetricRecorder::GetInstance();
-    open_telemetry_metric_recorder.RegisterGaugeMetric(name, description);
+  if (T == GAUGE &&
+      ::RayConfig::instance().experimental_enable_open_telemetry_on_core()) {
+    OpenTelemetryMetricRecorder::GetInstance().RegisterGaugeMetric(name, description);
+  } else {
+    internal::RegisterAsView(view_descriptor, tag_keys);
   }
-  internal::RegisterAsView(view_descriptor, tag_keys);
 }
 
 template <typename T = void>
@@ -333,6 +336,28 @@ class Stats {
     }
   }
 
+  /// Helper function to record a value, either through OpenTelemetry or OpenCensus.
+  void record(double val,
+              const std::vector<std::pair<opencensus::tags::TagKey, std::string>>
+                  &open_census_tags) {
+    if (!::RayConfig::instance().experimental_enable_open_telemetry_on_core()) {
+      opencensus::stats::Record({{*measure_, val}}, std::move(open_census_tags));
+      return;
+    }
+    absl::flat_hash_map<std::string, std::string> open_telemetry_tags;
+    for (auto &[tag_key, tag_val] : open_census_tags) {
+      open_telemetry_tags[tag_key.name()] = tag_val;
+    }
+    bool success = OpenTelemetryMetricRecorder::GetInstance().SetMetricValue(
+        name_, std::move(open_telemetry_tags), val);
+    if (success) {
+      return;
+    }
+    /// Cannot record the metric using OpenTelemetry even though it is enabled.
+    /// Just fall back to OpenCensus since the OpenTelemetry migration is incomplete.
+    opencensus::stats::Record({{*measure_, val}}, std::move(open_census_tags));
+  }
+
   /// Record a value
   /// \param val The value to record
   void Record(double val) {
@@ -351,7 +376,7 @@ class Stats {
     TagsType combined_tags = StatsConfig::instance().GetGlobalTags();
     CheckPrintableChar(tag_val);
     combined_tags.emplace_back(tag_keys_[0], std::move(tag_val));
-    opencensus::stats::Record({{*measure_, val}}, std::move(combined_tags));
+    record(val, combined_tags);
   }
 
   /// Record a value
@@ -366,17 +391,7 @@ class Stats {
       CheckPrintableChar(tag_val);
       combined_tags.emplace_back(TagKeyType::Register(tag_key), std::move(tag_val));
     }
-
-    if (RayConfig::instance().enable_open_telemetry_on_worker()) {
-      auto &open_telemetry_metric_recorder =
-          ray::telemetry::OpenTelemetryMetricRecorder::GetInstance();
-      std::map<std::string, std::string> tags;
-      for (auto &[tag_key, tag_val] : combined_tags) {
-        tags[tag_key.name()] = tag_val;
-      }
-      open_telemetry_metric_recorder.SetMetricValue(name_, tags, val);
-    }
-    opencensus::stats::Record({{*measure_, val}}, std::move(combined_tags));
+    record(val, combined_tags);
   }
 
   /// Record a value
@@ -392,17 +407,7 @@ class Stats {
       CheckPrintableChar(tag_val);
     }
     combined_tags.insert(combined_tags.end(), tags.begin(), tags.end());
-
-    if (RayConfig::instance().enable_open_telemetry_on_worker()) {
-      auto &open_telemetry_metric_recorder =
-          ray::telemetry::OpenTelemetryMetricRecorder::GetInstance();
-      std::map<std::string, std::string> tags;
-      for (auto &[tag_key, tag_val] : combined_tags) {
-        tags[tag_key.name()] = tag_val;
-      }
-      open_telemetry_metric_recorder.SetMetricValue(name_, tags, val);
-    }
-    opencensus::stats::Record({{*measure_, val}}, std::move(combined_tags));
+    record(val, combined_tags);
   }
 
  private:
@@ -416,7 +421,7 @@ class Stats {
 #endif  // NDEBUG
   }
 
-  const std::string &name_;
+  const std::string name_;
   const std::vector<opencensus::tags::TagKey> tag_keys_;
   std::unique_ptr<opencensus::stats::Measure<double>> measure_;
 };
