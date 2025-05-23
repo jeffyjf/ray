@@ -178,16 +178,17 @@ void OpenTelemetryMetricRecorder::RegisterGaugeMetric(const std::string &name,
   registered_instruments_[name] = instrument;
 }
 
-void OpenTelemetryMetricRecorder::SetMetricValue(
+bool OpenTelemetryMetricRecorder::SetMetricValue(
     const std::string &name,
     absl::flat_hash_map<std::string, std::string> &&tags,
     double value) {
   std::lock_guard<std::mutex> lock(mutex_);
   auto it = observations_by_name_.find(name);
   if (it == observations_by_name_.end()) {
-    return;  // Not registered
+    return false;  // Not registered
   }
   it->second[std::move(tags)] = value;  // Set or update the value
+  return true;
 }
 
 std::optional<double> OpenTelemetryMetricRecorder::GetMetricValue(
