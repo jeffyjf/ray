@@ -184,5 +184,31 @@ std::optional<double> OpenTelemetryMetricRecorder::GetObservableMetricValue(
   return std::nullopt;
 }
 
+std::optional<double> OpenTelemetryMetricRecorder::getSynchronousMetricValue(
+    const std::string &name,
+    const absl::flat_hash_map<std::string, std::string> &tags) const {
+  auto it = registered_synchronous_instruments_.find(name);
+  if (it == registered_synchronous_instruments_.end()) {
+    return std::nullopt;  // Not registered
+  }
+  auto instrument = it->second;
+  double value = 0.0;
+  auto result = instrument->GetValue(tags, &value);
+  if (result) {
+    return value;  // Get the value
+  }
+  return std::nullopt;  // No value found for the given tags
+}
+
+std::optional<double> OpenTelemetryMetricRecorder::GetMetricValue(
+    const std::string &name,
+    const absl::flat_hash_map<std::string, std::string> &tags) const {
+  if (isObservableMetric(name)) {
+    return getObservableMetricValue(name, tags);
+  } else {
+    return getSynchronousMetricValue(name, tags);
+  }
+}
+
 }  // namespace telemetry
 }  // namespace ray
