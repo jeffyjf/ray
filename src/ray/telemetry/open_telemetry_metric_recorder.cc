@@ -21,6 +21,8 @@
 #include <cassert>
 #include <utility>
 
+#include "ray/util/logging.h"
+
 // Anonymous namespace that contains the private callback functions for the
 // OpenTelemetry metrics.
 namespace {
@@ -101,17 +103,29 @@ void OpenTelemetryMetricRecorder::CollectGaugeMetricValues(
 void OpenTelemetryMetricRecorder::RegisterGaugeMetric(const std::string &name,
                                                       const std::string &description) {
   std::lock_guard<std::mutex> lock(mutex_);
-  if (registered_instruments_.find(name) != registered_instruments_.end()) {
+  if (registered_observable_instruments_.find(name) !=
+      registered_observable_instruments_.end()) {
     return;  // Already registered
   }
   auto instrument = getMeter()->CreateDoubleObservableGauge(name, description, "");
   std::string *name_ptr = new std::string(name);
   instrument->AddCallback(&_DoubleGaugeCallback, static_cast<void *>(name_ptr));
   observations_by_name_[name] = {};
-  registered_instruments_[name] = instrument;
+  registered_observable_instruments_[name] = instrument;
 }
 
-bool OpenTelemetryMetricRecorder::SetMetricValue(
+void OpenTelemetryMetricRecorder::RegisterCounterMetric(const std::string &name,
+                                                        const std::string &description) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  if (registered_synchronous_instruments_.find(name) !=
+      registered_synchronous_instruments_.end()) {
+    return;  // Already registered
+  }
+  auto instrument = getMeter()->CreateDoubleCounter(name, description, "");
+  registered_synchronous_instruments_[name] = std::move(instrument);
+}
+
+bool OpenTelemetryMetricRecorder::setObservableMetricValue(
     const std::string &name,
     absl::flat_hash_map<std::string, std::string> &&tags,
     double value) {
@@ -124,12 +138,44 @@ bool OpenTelemetryMetricRecorder::SetMetricValue(
   return true;
 }
 
-std::optional<double> OpenTelemetryMetricRecorder::GetMetricValue(
+bool OpenTelemetryMetricRecorder::setSynchronousMetricValue(
+    const std::string &name,
+    absl::flat_hash_map<std::string, std::string> &&tags,
+    double value) {
+  std::lock_guard<std::mutex> lock(mutex_);
+  auto it = registered_synchronous_instruments_.find(name);
+  if (it == registered_synchronous_instruments_.end()) {
+    return false;  // Not registered
+  }
+  auto &instrument = it->second;
+  if (auto counter =
+          dynamic_cast<opentelemetry::metrics::Counter<double> *>(instrument.get())) {
+    counter->Add(value, std::move(tags));
+    return true;
+  } else {
+    // Unknown or unsupported instrument type
+    RAY_CHECK(false) << "Unsupported synchronous instrument type for metric: " << name;
+    return false;
+  }
+}
+
+bool OpenTelemetryMetricRecorder::SetMetricValue(
+    const std::string &name,
+    absl::flat_hash_map<std::string, std::string> &&tags,
+    double value) {
+  if (isObservableMetric(name)) {
+    return setObservableMetricValue(name, std::move(tags), value);
+  } else {
+    return setSynchronousMetricValue(name, std::move(tags), value);
+  }
+}
+
+std::optional<double> OpenTelemetryMetricRecorder::GetObservableMetricValue(
     const std::string &name,
     const absl::flat_hash_map<std::string, std::string> &tags) const {
   auto it = observations_by_name_.find(name);
   if (it == observations_by_name_.end()) {
-    return std::nullopt;  // Not registered
+    return std::nullopt;  // Not registered or not an observable metric
   }
   auto tag_it = it->second.find(tags);
   if (tag_it != it->second.end()) {

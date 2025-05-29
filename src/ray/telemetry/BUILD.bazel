@@ -9,6 +9,7 @@ ray_cc_library(
         "open_telemetry_metric_recorder.h",
     ],
     deps = [
+        "//src/ray/util:logging",
         "@io_opentelemetry_cpp//api",
         "@io_opentelemetry_cpp//exporters/otlp:otlp_grpc_metric_exporter",
         "@io_opentelemetry_cpp//sdk/src/metrics",
