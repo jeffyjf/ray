@@ -60,17 +60,5 @@ TEST_F(OpenTelemetryMetricRecorderTest, TestCounterMetric) {
       recorder_.SetMetricValue("unregistered_counter", {{"tag1", "value1"}}, 10.0));
 }
 
-TEST_F(OpenTelemetryMetricRecorderTest, TestCounterMetric) {
-  recorder_.RegisterCounterMetric("test_counter", "Test counter description");
-  recorder_.SetMetricValue("test_counter", {{"tag1", "value1"}}, 10.0);
-  ASSERT_EQ(recorder_.GetMetricValue("test_counter", {{"tag1", "value1"}}), 10.0);
-
-  // Increment the counter
-  recorder_.SetMetricValue("test_counter", {{"tag1", "value1"}}, 15.0);
-  ASSERT_EQ(recorder_.GetMetricValue("test_counter", {{"tag1", "value1"}}), 25.0);
-
-  // Check a different tag
-  ASSERT_EQ(recorder_.GetMetricValue("test_counter", {{"tag1", "value2"}}), std::nullopt);
-
 }  // namespace telemetry
 }  // namespace ray
